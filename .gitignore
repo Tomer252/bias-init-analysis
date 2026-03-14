@@ -1,0 +1,11 @@
+.venv/*
+.idea/*
+runs/*
+models/*
+figures/*
+data/*
+__pycache__/*
+archive/*
+uv.lock
+AllClasses_15-05/*
+old/*
