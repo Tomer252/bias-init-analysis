@@ -28,12 +28,20 @@ def saliency_entropy(S):
 def maxmean_short_distance(S, threshold):
     coords = (S >= threshold).nonzero(as_tuple=False)
     if coords.shape[0] < 2:
-        return 0.0
+        thresh_str = f"thresh_{threshold:.2f}"
+        return {
+            f"max_short_distance_{thresh_str}": 0.0,
+            f"mean_short_distance_{thresh_str}": 0.0
+        }
 
     points = coords.cpu().numpy()
     tree = cKDTree(points)
     dists, _ = tree.query(points, k=2)
-    return float(dists[:, 1].max()), float(dists[:, 1].mean())
+    thresh_str = f"thresh_{threshold:.2f}"
+    return {
+        f"max_short_distance_{thresh_str}": float(dists[:, 1].max()),
+        f"mean_short_distance_{thresh_str}": float(dists[:, 1].mean())
+    }
 
 def top_k_concentration(S, k=0.1):
     """
@@ -94,12 +102,58 @@ def saliency_attribution(S, masks):
     
     return attribution
 
-# metrics.py
-
 from sklearn.cluster import AgglomerativeClustering, DBSCAN
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, squareform, cdist
 from scipy.ndimage import label as connected_components
 import numpy as np
+
+def _calculate_min_inter_cluster_distance(coords, labels, num_clusters):
+    """
+    Calculate minimum distance between clusters (closest point-to-point distance).
+    
+    Args:
+        coords: Array of shape (N, 2) with coordinates
+        labels: Cluster labels for each point
+        num_clusters: Number of clusters
+        
+    Returns:
+        tuple: (avg_min_distance, max_min_distance)
+    """
+    if num_clusters < 2:
+        return 0.0, 0.0
+    
+    # Pre-compute cluster membership once
+    clusters = [np.where(labels == i)[0] for i in range(num_clusters)]
+    min_distances = []
+    
+    # Use KDTree for efficient nearest neighbor search
+    for i in range(num_clusters):
+        indices_i = clusters[i]
+        if len(indices_i) == 0:
+            continue
+
+        clusters_distances = []
+        
+        for j in range(num_clusters):
+            if i == j:
+                continue
+            indices_j = clusters[j]
+            if len(indices_j) == 0:
+                continue
+            
+            # Calculate all pairwise distances between clusters i and j
+            cluster_i = coords[indices_i]
+            cluster_j = coords[indices_j]
+            
+            distances = cdist(cluster_i, cluster_j, metric='euclidean')
+            min_dist = distances.min()
+            clusters_distances.append(min_dist)
+
+        min_distances.append(min(clusters_distances) if clusters_distances else float('inf'))
+        
+    if min_distances:
+        return np.mean(min_distances), np.max(min_distances)
+    return 0.0, 0.0
 
 def mdl_cluster_analysis(S, threshold, max_clusters=10):
     """
@@ -276,7 +330,6 @@ def connected_component_analysis(S, threshold):
         }
     
     # Calculate cluster properties
-    cluster_centers = []
     cluster_sizes = []
     
     for comp_id in range(1, num_components + 1):
@@ -284,17 +337,28 @@ def connected_component_analysis(S, threshold):
         coords = np.argwhere(component_mask)
         
         if len(coords) > 0:
-            cluster_centers.append(coords.mean(axis=0))
             cluster_sizes.append(len(coords))
     
-    cluster_centers = np.array(cluster_centers)
     cluster_sizes = np.array(cluster_sizes)
     
-    # Inter-cluster distances
-    if len(cluster_centers) > 1:
-        distances = pdist(cluster_centers, metric='euclidean')
-        avg_distance = distances.mean()
-        max_distance = distances.max()
+    # Inter-cluster distances (minimal point-to-point)
+    if num_components > 1:
+        # Get coordinates for each component separately
+        all_coords = []
+        labels = []
+        
+        for comp_id in range(1, num_components + 1):
+            component_mask = (labeled_array == comp_id)
+            coords = np.argwhere(component_mask)
+            if len(coords) > 0:
+                all_coords.append(coords)
+                labels.extend([comp_id - 1] * len(coords))  # 0-indexed labels
+        
+        all_coords = np.vstack(all_coords)
+        labels = np.array(labels)
+        
+        avg_distance, max_distance = _calculate_min_inter_cluster_distance(
+            all_coords, labels, num_components)
     else:
         avg_distance = 0.0
         max_distance = 0.0
@@ -302,6 +366,7 @@ def connected_component_analysis(S, threshold):
     # Cluster size statistics
     avg_size = cluster_sizes.mean()
     size_ratio = cluster_sizes.max() / cluster_sizes.sum() if cluster_sizes.sum() > 0 else 0
+
     
     return {
         f'cc_num_clusters_{thresh_str}': int(num_components),
@@ -309,6 +374,9 @@ def connected_component_analysis(S, threshold):
         f'cc_max_inter_cluster_distance_{thresh_str}': float(max_distance),
         f'cc_avg_cluster_size_{thresh_str}': float(avg_size),
         f'cc_cluster_size_ratio_{thresh_str}': float(size_ratio),
+        f'cc_cluster_size_ratio_{thresh_str}': float(size_ratio),
         f'num_salient_pixels_{thresh_str}': int(cluster_sizes.sum()),
         f'salient_pixels_percent_{thresh_str}': float(cluster_sizes.sum() /  S.numel() * 100)
     }
+        
+    

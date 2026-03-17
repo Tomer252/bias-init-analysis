@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 from pathlib import Path
 import os
+import argparse
 
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -25,14 +26,27 @@ from face_recognition_model_comparison import FER2013Dataset, SimpleCNN, test_tr
 from ResNet import ResNet
 from utils import get_device
 from PIL import Image
+from datetime import datetime
 
-SAL_DIR = Path("saliency_maps/resnet_bias10")
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Compute and visualize saliency metrics for neural network models')
+parser.add_argument('--experiment-name', type=str, default='resnet_bias10',
+                    help='Experiment name used in directory and file names (default: resnet_bias10)')
+parser.add_argument('--models-folder', type=str, default='models/ResNet/bias=10.0/',
+                    help='Path to models folder (default: models/ResNet/bias=10.0/)')
+args = parser.parse_args()
+
+experiment_name = args.experiment_name
+models_folder = args.models_folder
+
+SAL_DIR = Path(f"saliency_maps/{experiment_name}")
 MASK_DIR = Path("saliency_project/face_parts/face_masks")
 # Create output directory for visualizations
-VIZ_DIR = Path("saliency_visualizations/resnet_bias10")
+VIZ_DIR = Path(f"saliency_visualizations/{experiment_name}")
 VIZ_DIR.mkdir(exist_ok=True)
-OUTPUT_FILE = "saliency_metrics_resnet_bias10.csv"
-MODELS_FOLDER_PATH = "models/ResNet/bias=10.0/"
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTPUT_FILE = f"saliency_metrics_{experiment_name}_{timestamp}.csv"
+MODELS_FOLDER_PATH = models_folder
 classes=["fear","angry"]
 
 dataset = FER2013Dataset('data/face-expression/test', transform=test_transforms, classes=classes)
@@ -120,16 +134,15 @@ for model_dir in SAL_DIR.iterdir():
         rec = {
             "model": model_dir.name,
             "image": image_id,
-            # "normalized_entropy": saliency_entropy(S),
-            # "max_short_distance": maxmean_short_distance(S, threshold)[0],
-            # "mean_short_distance": maxmean_short_distance(S, threshold)[1],
+            "normalized_entropy": saliency_entropy(S),
         }
 
-        THRESHOLDS = [0.2, 0.3, 0.4 ,0.5, 0.6]
+        THRESHOLDS = [0.3]
         for threshold in THRESHOLDS:
             
             # Cluster-based metrics (all three methods)
             rec.update(connected_component_analysis(S, threshold))
+            #rec.update(maxmean_short_distance(S, threshold))
         
         rec.update(face_part_coverage(S, masks, 0.3))
         rec.update(saliency_attribution(S, masks))
@@ -139,7 +152,7 @@ df = pd.DataFrame(records)
 
 df.to_csv(OUTPUT_FILE, index=False)
 
-# --- VISUALIZATION ---
+--- VISUALIZATION ---
 example_images = df["image"].unique()[:50]
 
 for image_id in example_images:
